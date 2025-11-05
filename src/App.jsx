@@ -4,9 +4,53 @@ import {
 } from "react-bootstrap";
 import { isSafeOrder, listPermutations, computeNeed } from "./bankers";
 
+/* ---------- Small helper: digits only → number (no negatives) ---------- */
+function toNonNegInt(value) {
+  const clean = String(value ?? "")
+    .replace(/\D+/g, "");          // keep digits only
+  return clean === "" ? 0 : Number(clean);
+}
+
+/* Reusable numeric input (digits only) */
+function NumericInput({ value, onChange, min = 0, ...props }) {
+  const handleKeyDown = (e) => {
+    const k = e.key;
+    const ok =
+      (k >= "0" && k <= "9") ||
+      k === "Backspace" ||
+      k === "Delete" ||
+      k === "ArrowLeft" ||
+      k === "ArrowRight" ||
+      k === "Tab" ||
+      k === "Home" ||
+      k === "End";
+    if (!ok) e.preventDefault();
+  };
+  const handlePaste = (e) => {
+    e.preventDefault();
+    const pasted = (e.clipboardData.getData("text") || "").replace(/\D+/g, "");
+    const n = pasted === "" ? 0 : Number(pasted);
+    onChange(n);
+  };
+  const handleChange = (e) => onChange(toNonNegInt(e.target.value));
+
+  return (
+    <Form.Control
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={value}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+      onChange={handleChange}
+      {...props}
+    />
+  );
+}
+
 /* ---------------- UI ---------------- */
 export default function App() {
-  // Defaults (same as your sample)
+  // Defaults (same as the sample)
   const [total, setTotal] = useState(10);
   const [n, setN] = useState(3);
   const [ids, setIds] = useState(["P1", "P2", "P3"]);
@@ -14,14 +58,15 @@ export default function App() {
   const [hold, setHold] = useState([1, 3, 3]);
 
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [lines, setLines] = useState(null);
 
   // Derived values
-  const need = useMemo(() => computeNeed(max, hold), [max, hold]);
   const totalHold = useMemo(
     () => hold.slice(0, n).reduce((s, h) => s + Number(h || 0), 0),
     [hold, n]
   );
+  const need = useMemo(() => computeNeed(max, hold), [max, hold]);
 
   // Keep arrays sized to n
   const resize = (len) => {
@@ -30,38 +75,78 @@ export default function App() {
     setHold((p) => Array.from({ length: len }, (_, i) => Number(p[i] ?? 0)));
   };
 
-  const onChangeN = (v) => {
-    const val = Math.max(3, Math.min(10, Number(v) || 3));
-    setN(val);
-    resize(val);
+  /* ---- Input handlers with validation/clamping (simple single-layer ifs) ---- */
+  const onChangeN = (val) => {
+    const clamped = Math.max(3, Math.min(10, toNonNegInt(val)));
+    setN(clamped);
+    resize(clamped);
   };
 
-  // Validation kept simple and linear
-  function validate() {
-    if (!Number.isFinite(Number(total)) || Number(total) < 0) {
-      return "Total resources must be a non-negative number.";
+  const onChangeTotal = (val) => {
+    const n = toNonNegInt(val);
+    if (n < totalHold) {
+      setTotal(totalHold);
+      setInfo(`Total cannot be less than currently held (${totalHold}). Auto-corrected.`);
+      return;
     }
+    setInfo("");
+    setTotal(n);
+  };
+
+  const onChangeMax = (idx, val) => {
+    const m = toNonNegInt(val);
+    const nextMax = [...max];
+    const nextHold = [...hold];
+
+    nextMax[idx] = m;
+    if (nextHold[idx] > m) {
+      // clamp hold so Need never goes negative
+      nextHold[idx] = m;
+      setInfo(`Hold for row ${idx + 1} clamped to Max.`);
+    } else {
+      setInfo("");
+    }
+    setMax(nextMax);
+    setHold(nextHold);
+  };
+
+  const onChangeHold = (idx, val) => {
+    const h = toNonNegInt(val);
+    const nextHold = [...hold];
+    let newH = h;
+
+    if (h > max[idx]) {
+      newH = max[idx]; // clamp to Max
+      setInfo(`Hold for row ${idx + 1} clamped to Max.`);
+    } else {
+      setInfo("");
+    }
+    nextHold[idx] = newH;
+
+    // also ensure total >= totalHold after change
+    const nextSum = nextHold.slice(0, n).reduce((s, v) => s + Number(v || 0), 0);
+    if (total < nextSum) setTotal(nextSum);
+
+    setHold(nextHold);
+  };
+
+  function validateBeforeCompute() {
+    // everything should already be consistent, but we keep a simple guard
+    if (total < totalHold) return "Total resources cannot be less than currently held.";
     for (let i = 0; i < n; i++) {
-      const m = Number(max[i] ?? 0);
-      const h = Number(hold[i] ?? 0);
-      if (!Number.isFinite(m) || !Number.isFinite(h) || m < 0 || h < 0) {
-        return "Max and Hold must be non-negative numbers.";
-      }
-      if (h > m) return `Row ${i + 1}: Hold cannot exceed Max.`;
+      if (hold[i] > max[i]) return `Row ${i + 1}: Hold cannot exceed Max.`;
     }
     if (n > 8) return "n > 8 creates a very large list (factorial). Reduce to 8 or below.";
     return "";
   }
 
   function compute() {
-    const v = validate();
+    setError(""); setInfo(""); setLines(null);
+    const v = validateBeforeCompute();
     if (v) {
       setError(v);
-      setLines(null);
       return;
     }
-    setError("");
-
     const perms = listPermutations(n);
     const out = perms.map((order) => {
       const tag = isSafeOrder(order, total, max, hold) ? "SAFE" : "UNSAFE";
@@ -82,7 +167,7 @@ export default function App() {
   }
 
   return (
-    <div className="page bg-body-tertiary">
+    <div className="page">
       <Container>
         <Card className="card-fixed p-3 p-md-4">
           <Card.Body>
@@ -97,25 +182,14 @@ export default function App() {
             <Row className="g-3 mb-3">
               <Col sm={6}>
                 <Form.Label className="fw-semibold">Total resources</Form.Label>
-                <Form.Control
-                  type="number"
-                  min={0}
-                  value={total}
-                  onChange={(e) => setTotal(e.target.value)}
-                />
+                <NumericInput value={total} onChange={onChangeTotal} />
                 <div className="small text-muted mt-1">
                   Currently held: <Badge bg="secondary">{totalHold}</Badge>
                 </div>
               </Col>
               <Col sm={6}>
                 <Form.Label className="fw-semibold"># of processes (3–10)</Form.Label>
-                <Form.Control
-                  type="number"
-                  min={3}
-                  max={10}
-                  value={n}
-                  onChange={(e) => onChangeN(e.target.value)}
-                />
+                <NumericInput value={n} onChange={onChangeN} />
               </Col>
             </Row>
 
@@ -145,32 +219,18 @@ export default function App() {
                       />
                     </td>
                     <td>
-                      <Form.Control
-                        type="number"
-                        min={0}
+                      <NumericInput
                         value={max[i] ?? 0}
-                        onChange={(e) => {
-                          const next = [...max];
-                          next[i] = Number(e.target.value);
-                          setMax(next);
-                        }}
+                        onChange={(v) => onChangeMax(i, v)}
                       />
                     </td>
                     <td>
-                      <Form.Control
-                        type="number"
-                        min={0}
+                      <NumericInput
                         value={hold[i] ?? 0}
-                        onChange={(e) => {
-                          const next = [...hold];
-                          next[i] = Number(e.target.value);
-                          setHold(next);
-                        }}
+                        onChange={(v) => onChangeHold(i, v)}
                       />
                     </td>
-                    <td className={`text-center ${need[i] < 0 ? "text-danger" : ""}`}>
-                      {need[i]}
-                    </td>
+                    <td className="text-center">{need[i]}</td>
                   </tr>
                 ))}
               </tbody>
@@ -185,7 +245,8 @@ export default function App() {
             </div>
 
             {/* Feedback */}
-            {error && <Alert variant="warning" className="mb-3">{error}</Alert>}
+            {error && <Alert variant="warning" className="mb-2">{error}</Alert>}
+            {info && !error && <Alert variant="info" className="mb-2">{info}</Alert>}
 
             {/* Results */}
             <div className="results border rounded-3 p-3 bg-light">
