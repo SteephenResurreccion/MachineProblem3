@@ -4,149 +4,87 @@ import {
 } from "react-bootstrap";
 import { isSafeOrder, listPermutations, computeNeed } from "./bankers";
 
-/* ---------- Small helper: digits only → number (no negatives) ---------- */
+/* ---------- digits-only input helper ---------- */
 function toNonNegInt(value) {
-  const clean = String(value ?? "")
-    .replace(/\D+/g, "");          // keep digits only
+  const clean = String(value ?? "").replace(/\D+/g, "");
   return clean === "" ? 0 : Number(clean);
 }
 
-/* Reusable numeric input (digits only) */
-function NumericInput({ value, onChange, min = 0, ...props }) {
-  const handleKeyDown = (e) => {
+function NumericInput({ value, onChange, ...props }) {
+  const onKeyDown = (e) => {
     const k = e.key;
     const ok =
       (k >= "0" && k <= "9") ||
-      k === "Backspace" ||
-      k === "Delete" ||
-      k === "ArrowLeft" ||
-      k === "ArrowRight" ||
-      k === "Tab" ||
-      k === "Home" ||
-      k === "End";
+      ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Tab", "Home", "End"].includes(k);
     if (!ok) e.preventDefault();
   };
-  const handlePaste = (e) => {
+  const onPaste = (e) => {
     e.preventDefault();
     const pasted = (e.clipboardData.getData("text") || "").replace(/\D+/g, "");
-    const n = pasted === "" ? 0 : Number(pasted);
-    onChange(n);
+    onChange(pasted === "" ? 0 : Number(pasted));
   };
-  const handleChange = (e) => onChange(toNonNegInt(e.target.value));
-
   return (
     <Form.Control
       type="text"
       inputMode="numeric"
       pattern="[0-9]*"
       value={value}
-      onKeyDown={handleKeyDown}
-      onPaste={handlePaste}
-      onChange={handleChange}
+      onKeyDown={onKeyDown}
+      onPaste={onPaste}
+      onChange={(e) => onChange(toNonNegInt(e.target.value))}
       {...props}
     />
   );
 }
 
-/* ---------------- UI ---------------- */
 export default function App() {
-  // Defaults (same as the sample)
+  // Defaults (same as your sample)
   const [total, setTotal] = useState(10);
   const [n, setN] = useState(3);
   const [ids, setIds] = useState(["P1", "P2", "P3"]);
   const [max, setMax] = useState([8, 5, 9]);
   const [hold, setHold] = useState([1, 3, 3]);
 
-  const [error, setError] = useState("");
-  const [info, setInfo] = useState("");
   const [lines, setLines] = useState(null);
 
-  // Derived values
+  // Derived
   const totalHold = useMemo(
     () => hold.slice(0, n).reduce((s, h) => s + Number(h || 0), 0),
     [hold, n]
   );
   const need = useMemo(() => computeNeed(max, hold), [max, hold]);
 
-  // Keep arrays sized to n
+  // Resize rows to n (no clamping)
   const resize = (len) => {
     setIds((p) => Array.from({ length: len }, (_, i) => p[i] ?? `P${i + 1}`));
     setMax((p) => Array.from({ length: len }, (_, i) => Number(p[i] ?? 0)));
     setHold((p) => Array.from({ length: len }, (_, i) => Number(p[i] ?? 0)));
   };
 
-  /* ---- Input handlers with validation/clamping (simple single-layer ifs) ---- */
   const onChangeN = (val) => {
-    const clamped = Math.max(3, Math.min(10, toNonNegInt(val)));
-    setN(clamped);
-    resize(clamped);
+    const v = Math.max(3, Math.min(10, toNonNegInt(val)));
+    setN(v);
+    resize(v);
   };
 
-  const onChangeTotal = (val) => {
-    const n = toNonNegInt(val);
-    if (n < totalHold) {
-      setTotal(totalHold);
-      setInfo(`Total cannot be less than currently held (${totalHold}). Auto-corrected.`);
-      return;
-    }
-    setInfo("");
-    setTotal(n);
-  };
+  // --- IMPORTANT: no auto-corrections below ---
+  const onChangeTotal = (val) => setTotal(toNonNegInt(val));
+  const onChangeMax   = (i, val) => { const next=[...max];  next[i]=toNonNegInt(val);  setMax(next); };
+  const onChangeHold  = (i, val) => { const next=[...hold]; next[i]=toNonNegInt(val); setHold(next); };
 
-  const onChangeMax = (idx, val) => {
-    const m = toNonNegInt(val);
-    const nextMax = [...max];
-    const nextHold = [...hold];
-
-    nextMax[idx] = m;
-    if (nextHold[idx] > m) {
-      // clamp hold so Need never goes negative
-      nextHold[idx] = m;
-      setInfo(`Hold for row ${idx + 1} clamped to Max.`);
-    } else {
-      setInfo("");
-    }
-    setMax(nextMax);
-    setHold(nextHold);
-  };
-
-  const onChangeHold = (idx, val) => {
-    const h = toNonNegInt(val);
-    const nextHold = [...hold];
-    let newH = h;
-
-    if (h > max[idx]) {
-      newH = max[idx]; // clamp to Max
-      setInfo(`Hold for row ${idx + 1} clamped to Max.`);
-    } else {
-      setInfo("");
-    }
-    nextHold[idx] = newH;
-
-    // also ensure total >= totalHold after change
-    const nextSum = nextHold.slice(0, n).reduce((s, v) => s + Number(v || 0), 0);
-    if (total < nextSum) setTotal(nextSum);
-
-    setHold(nextHold);
-  };
-
-  function validateBeforeCompute() {
-    // everything should already be consistent, but we keep a simple guard
-    if (total < totalHold) return "Total resources cannot be less than currently held.";
+  // Non-blocking warnings (we still allow Compute)
+  const warnings = useMemo(() => {
+    const w = [];
+    if (total < totalHold) w.push(`Total (${total}) is less than currently held (${totalHold}).`);
     for (let i = 0; i < n; i++) {
-      if (hold[i] > max[i]) return `Row ${i + 1}: Hold cannot exceed Max.`;
+      if (hold[i] > max[i]) w.push(`Row ${i + 1}: Hold (${hold[i]}) exceeds Max (${max[i]}).`);
     }
-    if (n > 8) return "n > 8 creates a very large list (factorial). Reduce to 8 or below.";
-    return "";
-  }
+    if (n > 8) w.push("n > 8 will generate an extremely large list (factorial).");
+    return w;
+  }, [total, totalHold, hold, max, n]);
 
   function compute() {
-    setError(""); setInfo(""); setLines(null);
-    const v = validateBeforeCompute();
-    if (v) {
-      setError(v);
-      return;
-    }
+    // Even if there are warnings, we compute anyway.
     const perms = listPermutations(n);
     const out = perms.map((order) => {
       const tag = isSafeOrder(order, total, max, hold) ? "SAFE" : "UNSAFE";
@@ -178,7 +116,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Top inputs */}
             <Row className="g-3 mb-3">
               <Col sm={6}>
                 <Form.Label className="fw-semibold">Total resources</Form.Label>
@@ -193,7 +130,15 @@ export default function App() {
               </Col>
             </Row>
 
-            {/* Process table */}
+            {/* Warnings (non-blocking) */}
+            {warnings.length > 0 && (
+              <Alert variant="warning" className="py-2">
+                <ul className="mb-0 ps-3">
+                  {warnings.map((t, i) => <li key={i}>{t}</li>)}
+                </ul>
+              </Alert>
+            )}
+
             <Table bordered responsive size="sm" className="mb-3">
               <thead className="table-light">
                 <tr className="text-center">
@@ -219,24 +164,17 @@ export default function App() {
                       />
                     </td>
                     <td>
-                      <NumericInput
-                        value={max[i] ?? 0}
-                        onChange={(v) => onChangeMax(i, v)}
-                      />
+                      <NumericInput value={max[i] ?? 0} onChange={(v) => onChangeMax(i, v)} />
                     </td>
                     <td>
-                      <NumericInput
-                        value={hold[i] ?? 0}
-                        onChange={(v) => onChangeHold(i, v)}
-                      />
+                      <NumericInput value={hold[i] ?? 0} onChange={(v) => onChangeHold(i, v)} />
                     </td>
-                    <td className="text-center">{need[i]}</td>
+                    <td className={`text-center ${need[i] < 0 ? "text-danger" : ""}`}>{need[i]}</td>
                   </tr>
                 ))}
               </tbody>
             </Table>
 
-            {/* Actions */}
             <div className="d-flex justify-content-center gap-2 mb-3">
               <Button variant="primary" onClick={compute}>Compute</Button>
               <Button variant="secondary" onClick={saveTxt} disabled={!lines?.length}>
@@ -244,11 +182,6 @@ export default function App() {
               </Button>
             </div>
 
-            {/* Feedback */}
-            {error && <Alert variant="warning" className="mb-2">{error}</Alert>}
-            {info && !error && <Alert variant="info" className="mb-2">{info}</Alert>}
-
-            {/* Results */}
             <div className="results border rounded-3 p-3 bg-light">
               {lines ? (
                 <ListGroup variant="flush" className="font-monospace">
