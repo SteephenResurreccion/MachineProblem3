@@ -1,0 +1,45 @@
+:root {
+  --card-max-w: 860px;
+}
+
+/* Full-page centering */
+body, html {
+  height: 100%;
+  margin: 0;
+  background-color: #f5f6f8;
+}
+
+.page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  padding: 1rem;
+}
+
+/* Card style */
+.card-fixed {
+  width: 100%;
+  max-width: var(--card-max-w);
+  border: none;
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  background: white;
+}
+
+/* Table adjustments */
+.table td,
+.table th {
+  vertical-align: middle;
+}
+
+/* Scrollable results */
+.results {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* Buttons and spacing */
+button {
+  min-width: 120px;
+}
